@@ -3651,6 +3651,35 @@ static float klovrp_fake_trigger(void) {
     return klovrp_fake_phase() ? v : 0.0f;
 }
 
+// The frontend hands touches over in ovrpButton bit values ("this button is
+// touched"), which is what the OpenXR path reads. The OVRPlugin struct wants
+// ovrpTouch and ovrpNearTouch, which number things differently:
+//   ovrpTouch     A 0x1  B 0x2  RThumbstick 0x4  RIndexTrigger 0x10
+//                 X 0x100  Y 0x200  LThumbstick 0x400  LIndexTrigger 0x1000
+//   ovrpNearTouch LIndexTrigger 0x1  LThumbButtons 0x2
+//                 RIndexTrigger 0x4  RThumbButtons 0x8
+// The face buttons and stick clicks coincide; the triggers do not, and the
+// button word's stick DIRECTION bits (0x10.., 0x1000..) land squarely on the
+// two trigger-touch bits. Passed through raw, a trigger touch was invisible
+// and pushing a stick up read as touching a trigger. Unity's legacy joystick
+// maps trigger TOUCH to buttons 14 (L) / 15 (R), and that is the select
+// Air Brigade 2's menu reads (InputManager "Oculus_GearVR_Trigger").
+#define KLOVRP_TOUCH_FACE 0x00000707u   // A B RThumbstick X Y LThumbstick
+static uint32_t klovrp_touch_bits(uint32_t t) {
+    uint32_t r = t & KLOVRP_TOUCH_FACE;
+    if (t & 0x04000000u) r |= 0x10u;        // RIndexTrigger
+    if (t & 0x10000000u) r |= 0x1000u;      // LIndexTrigger
+    return r;
+}
+static uint32_t klovrp_neartouch_bits(uint32_t t) {
+    uint32_t r = 0;
+    if (t & 0x10000000u) r |= 0x1u;                     // LIndexTrigger
+    if (t & (0x100u | 0x200u | 0x400u)) r |= 0x2u;      // LThumbButtons
+    if (t & 0x04000000u) r |= 0x4u;                     // RIndexTrigger
+    if (t & (0x1u | 0x2u | 0x4u)) r |= 0x8u;            // RThumbButtons
+    return r;
+}
+
 static void fill_controller_state(int mask, void *out, int version) {
     memset(out, 0, version >= 4 ? 0x60 : version == 2 ? 0x40 : 0x30);
     uint32_t m = (uint32_t)mask;
@@ -3669,8 +3698,8 @@ static void fill_controller_state(int mask, void *out, int version) {
     w[0] = conn;                                        // ConnectedControllers
     if (conn & OVRP_CTRL_LTOUCH) {
         w[1] |= in[0].buttons;                          // Buttons
-        w[2] |= in[0].touches;                          // Touches
-        w[3] |= in[0].neartouches;                      // NearTouches
+        w[2] |= klovrp_touch_bits(in[0].touches);       // Touches
+        w[3] |= klovrp_neartouch_bits(in[0].neartouches); // NearTouches
         f[4] = in[0].index_trigger;                     // LIndexTrigger
         f[6] = in[0].hand_trigger;                      // LHandTrigger
         f[8] = in[0].stick_x; f[9] = in[0].stick_y;
@@ -3679,8 +3708,8 @@ static void fill_controller_state(int mask, void *out, int version) {
     }
     if (conn & OVRP_CTRL_RTOUCH) {
         w[1] |= in[1].buttons;
-        w[2] |= in[1].touches;
-        w[3] |= in[1].neartouches;
+        w[2] |= klovrp_touch_bits(in[1].touches);
+        w[3] |= klovrp_neartouch_bits(in[1].neartouches);
         f[5] = in[1].index_trigger;                     // RIndexTrigger
         f[7] = in[1].hand_trigger;                      // RHandTrigger
         f[10] = in[1].stick_x; f[11] = in[1].stick_y;
